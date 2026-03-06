@@ -12,7 +12,7 @@ This integration was built with the help of [Claude](https://claude.ai) (Anthrop
 
 ## Home Assistant
 
-A ready-to-use Home Assistant integration built on top of this library is available: [ha-eauidf](https://github.com/TimoPtr/ha-eauidf).
+A ready-to-use Home Assistant integration built on top of this library is available: [ha_eauidf](https://github.com/TimoPtr/ha_eauidf).
 
 ## Installation
 
