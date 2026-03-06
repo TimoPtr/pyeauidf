@@ -43,7 +43,7 @@ class ConsumptionRecord:
             date=datetime.strptime(raw["DATE_INDEX"], "%Y-%m-%d %H:%M:%S"),
             consumption_liters=float(raw["CONSOMMATION"]) * 1000,
             meter_reading=float(raw["VALEUR_INDEX"]),
-            is_estimated=raw.get("FLAG_ESTIMATION", False),
+            is_estimated=str(raw.get("FLAG_ESTIMATION", "")).lower() in ("true", "1", "yes"),
         )
 
 
@@ -53,6 +53,21 @@ class EauIDFError(Exception):
 
 class AuthenticationError(EauIDFError):
     pass
+
+
+def _build_ca_bundle() -> str:
+    """Create a CA bundle with the missing Gandi intermediate cert."""
+    intermediate = _INTERMEDIATE_CERT.read_text()
+    roots = Path(certifi.where()).read_text()
+    bundle = tempfile.NamedTemporaryFile(
+        suffix=".pem", prefix="pyeauidf_ca_", delete=False
+    )
+    bundle.write((intermediate + "\n" + roots).encode())
+    bundle.close()
+    return bundle.name
+
+
+_CA_BUNDLE = _build_ca_bundle()
 
 
 class EauIDFClient:
@@ -70,26 +85,13 @@ class EauIDFClient:
             ),
             "Origin": "https://connexion.leaudiledefrance.fr",
         })
-        # The server doesn't send the intermediate CA cert, so we build
+        # The server doesn't send the intermediate CA cert, so we use
         # a custom CA bundle: certifi roots + the bundled Gandi intermediate.
-        self._ca_bundle = self._build_ca_bundle()
-        self._session.verify = self._ca_bundle
+        self._session.verify = _CA_BUNDLE
         self._fwuid: str | None = None
         self._aura_token: str | None = None
         self._app_loaded: dict | None = None
         self._authenticated = False
-
-    @staticmethod
-    def _build_ca_bundle() -> str:
-        """Create a temp CA bundle with the missing Gandi intermediate cert."""
-        intermediate = _INTERMEDIATE_CERT.read_text()
-        roots = Path(certifi.where()).read_text()
-        bundle = tempfile.NamedTemporaryFile(
-            suffix=".pem", prefix="pyeauidf_ca_", delete=False
-        )
-        bundle.write((intermediate + "\n" + roots).encode())
-        bundle.close()
-        return bundle.name
 
     def _get_login_context(self) -> None:
         """Fetch the login page to extract fwuid and app context."""
@@ -286,7 +288,8 @@ class EauIDFClient:
             raise AuthenticationError("No redirect URL in login response")
 
         # Follow frontdoor.jsp to establish session cookies (sid, etc.)
-        self._session.get(redirect_url)
+        resp = self._session.get(redirect_url)
+        resp.raise_for_status()
 
         # Load the authenticated community page to get the app context
         resp = self._session.get(f"{BASE_URL}/s/")
@@ -399,8 +402,6 @@ class EauIDFClient:
 
     def close(self) -> None:
         self._session.close()
-        if self._ca_bundle:
-            Path(self._ca_bundle).unlink(missing_ok=True)
 
     def __enter__(self) -> EauIDFClient:
         return self
