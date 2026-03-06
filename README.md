@@ -4,6 +4,16 @@ Python client for [L'eau d'Île-de-France](https://connexion.leaudiledefrance.fr
 
 Fetches daily, weekly, or monthly water consumption history directly via the Salesforce Aura API — no browser or Selenium required.
 
+## Disclaimer
+
+This integration relies on scraping the SEDIF customer portal. It is not based on an official API, so any change to the website's structure or authentication flow may break it without notice.
+
+This integration was built with the help of [Claude](https://claude.ai) (Anthropic).
+
+## Home Assistant
+
+A ready-to-use Home Assistant integration built on top of this library is available: [ha-eauidf](https://github.com/TimoPtr/ha-eauidf).
+
 ## Installation
 
 ```bash
