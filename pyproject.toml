@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyeauidf"
+version = "0.1.0"
+description = "Python client for L'eau d'Ile-de-France (SEDIF) water consumption data"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Timothy", email = "6560631+TimoPtr@users.noreply.github.com" }]
+keywords = ["water", "consumption", "sedif", "ile-de-france", "home-assistant"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+]
+dependencies = ["requests>=2.28", "certifi"]
+
+[project.urls]
+Homepage = "https://github.com/TimoPtr/pyeauidf"
+Repository = "https://github.com/TimoPtr/pyeauidf"
+Issues = "https://github.com/TimoPtr/pyeauidf/issues"
+
+[project.scripts]
+pyeauidf = "pyeauidf.__main__:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "responses"]
+
+[tool.setuptools.package-data]
+pyeauidf = ["gandi_intermediate.pem"]
