@@ -39,8 +39,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
         print(f"Water consumption ({start} to {end}, {args.step}):\n")
         print(
-            f"  {'Date':<12} {'Liters':>8}"
-            f" {'Meter (m³)':>12} {'Est.':>5}",
+            f"  {'Date':<12} {'Liters':>8} {'Meter (m³)':>12} {'Est.':>5}",
         )
         print(f"  {'─' * 12} {'─' * 8} {'─' * 12} {'─' * 5}")
         for r in records:

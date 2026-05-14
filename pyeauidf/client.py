@@ -190,9 +190,7 @@ class EauIDFClient:
         data.add_field("aura.token", self._aura_token or "undefined")
 
         headers = {
-            "Content-Type": (
-                "application/x-www-form-urlencoded; charset=UTF-8"
-            ),
+            "Content-Type": ("application/x-www-form-urlencoded; charset=UTF-8"),
         }
         async with self._session.post(
             url,
@@ -271,9 +269,7 @@ class EauIDFClient:
 
         action = {
             "id": "1;a",
-            "descriptor": (
-                "apex://LightningLoginFormController/ACTION$login"
-            ),
+            "descriptor": ("apex://LightningLoginFormController/ACTION$login"),
             "callingDescriptor": "UNKNOWN",
             "params": {
                 "username": self._username,
@@ -338,9 +334,7 @@ class EauIDFClient:
         match = _COMMUNITY_APP_RE.search(html)
         if match:
             self._app_loaded = {
-                "APPLICATION@markup://siteforce:communityApp": (
-                    match.group(1)
-                ),
+                "APPLICATION@markup://siteforce:communityApp": (match.group(1)),
             }
 
         match = _FWUID_RE.search(html)
@@ -425,8 +419,7 @@ class EauIDFClient:
 
         data = result.get("data", {})
         records = [
-            ConsumptionRecord.from_api(raw)
-            for raw in data.get("CONSOMMATION", [])
+            ConsumptionRecord.from_api(raw) for raw in data.get("CONSOMMATION", [])
         ]
 
         return records
