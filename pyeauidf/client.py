@@ -15,7 +15,7 @@ import certifi
 import requests
 
 
-BASE_URL = "https://connexion.leaudiledefrance.fr/espace-particuliers"
+BASE_URL = "https://connexion.leaudiledefrance.fr"
 _INTERMEDIATE_CERT = Path(__file__).parent / "gandi_intermediate.pem"
 AURA_URL = f"{BASE_URL}/s/sfsites/aura"
 LOGIN_URL = f"{BASE_URL}/s/login/"
