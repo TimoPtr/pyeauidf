@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
+import enum
 import json
 import re
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import certifi
 import requests
-
 
 BASE_URL = "https://connexion.leaudiledefrance.fr"
 _INTERMEDIATE_CERT = Path(__file__).parent / "gandi_intermediate.pem"
@@ -24,7 +23,7 @@ LOGIN_APP = "siteforce:loginApp2"
 COMMUNITY_APP = "siteforce:communityApp"
 
 
-class TimeStep(str, Enum):
+class TimeStep(enum.StrEnum):
     DAILY = "JOURNEE"
     WEEKLY = "SEMAINE"
     MONTHLY = "MOIS"
@@ -38,7 +37,7 @@ class ConsumptionRecord:
     is_estimated: bool
 
     @classmethod
-    def from_api(cls, raw: dict) -> ConsumptionRecord:
+    def from_api(cls, raw: dict[str, Any]) -> ConsumptionRecord:
         return cls(
             date=datetime.strptime(raw["DATE_INDEX"], "%Y-%m-%d %H:%M:%S"),
             consumption_liters=float(raw["CONSOMMATION"]) * 1000,
@@ -59,9 +58,7 @@ def _build_ca_bundle() -> str:
     """Create a CA bundle with the missing Gandi intermediate cert."""
     intermediate = _INTERMEDIATE_CERT.read_text()
     roots = Path(certifi.where()).read_text()
-    bundle = tempfile.NamedTemporaryFile(
-        suffix=".pem", prefix="pyeauidf_ca_", delete=False
-    )
+    bundle = tempfile.NamedTemporaryFile(suffix=".pem", prefix="pyeauidf_ca_", delete=False)
     bundle.write((intermediate + "\n" + roots).encode())
     bundle.close()
     return bundle.name
@@ -77,20 +74,22 @@ class EauIDFClient:
         self._username = username
         self._password = password
         self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            "Origin": "https://connexion.leaudiledefrance.fr",
-        })
+        self._session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/145.0.0.0 Safari/537.36"
+                ),
+                "Origin": "https://connexion.leaudiledefrance.fr",
+            }
+        )
         # The server doesn't send the intermediate CA cert, so we use
         # a custom CA bundle: certifi roots + the bundled Gandi intermediate.
         self._session.verify = _CA_BUNDLE
         self._fwuid: str | None = None
         self._aura_token: str | None = None
-        self._app_loaded: dict | None = None
+        self._app_loaded: dict[str, str] | None = None
         self._authenticated = False
 
     def _get_login_context(self) -> None:
@@ -105,13 +104,9 @@ class EauIDFClient:
             self._fwuid = match.group(1)
 
         # Extract the loginApp2 loaded hash
-        match = re.search(
-            r'"APPLICATION@markup://siteforce:loginApp2"\s*:\s*"([^"]+)"', html
-        )
+        match = re.search(r'"APPLICATION@markup://siteforce:loginApp2"\s*:\s*"([^"]+)"', html)
         if match:
-            self._app_loaded = {
-                "APPLICATION@markup://siteforce:loginApp2": match.group(1)
-            }
+            self._app_loaded = {"APPLICATION@markup://siteforce:loginApp2": match.group(1)}
 
         if not self._fwuid:
             raise AuthenticationError("Could not extract fwuid from login page")
@@ -123,9 +118,8 @@ class EauIDFClient:
                 return cookie.value
         return None
 
-    def _build_aura_context(self, app: str = COMMUNITY_APP) -> dict:
-        loaded_key = f"APPLICATION@markup://{app}"
-        loaded = {}
+    def _build_aura_context(self, app: str = COMMUNITY_APP) -> dict[str, Any]:
+        loaded: dict[str, str] = {}
         if self._app_loaded:
             # Reuse whatever loaded hash we have
             for k, v in self._app_loaded.items():
@@ -142,10 +136,10 @@ class EauIDFClient:
 
     def _aura_call_raw(
         self,
-        actions: list[dict],
+        actions: list[dict[str, Any]],
         app: str = COMMUNITY_APP,
         page_uri: str = "/espace-particuliers/s/",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Make an Aura API call and return the full JSON response."""
         # Build query string descriptor hints
         descriptors = []
@@ -178,7 +172,7 @@ class EauIDFClient:
         )
         resp.raise_for_status()
 
-        result = resp.json()
+        result: dict[str, Any] = resp.json()
 
         # Update context if returned
         ctx = result.get("context", {})
@@ -192,17 +186,18 @@ class EauIDFClient:
 
     def _aura_call(
         self,
-        actions: list[dict],
+        actions: list[dict[str, Any]],
         **kwargs: Any,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Make an Aura API call and return just the action results."""
-        return self._aura_call_raw(actions, **kwargs).get("actions", [])
+        result: list[dict[str, Any]] = self._aura_call_raw(actions, **kwargs).get("actions", [])
+        return result
 
     def _apex_action(
         self,
         classname: str,
         method: str,
-        params: dict | None = None,
+        params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
         """Call a single Apex action and return its returnValue."""
@@ -230,9 +225,7 @@ class EauIDFClient:
         result = results[0]
         if result.get("state") != "SUCCESS":
             error = result.get("error", [])
-            raise EauIDFError(
-                f"{classname}.{method} failed: {error}"
-            )
+            raise EauIDFError(f"{classname}.{method} failed: {error}")
 
         rv = result.get("returnValue", {})
         # Apex actions wrap in an extra returnValue
@@ -274,7 +267,7 @@ class EauIDFClient:
 
         self._complete_login(response)
 
-    def _complete_login(self, login_response: dict) -> None:
+    def _complete_login(self, login_response: dict[str, Any]) -> None:
         """Follow the frontdoor redirect and extract session tokens."""
         # Extract the redirect URL from aura:clientRedirect event
         events = login_response.get("events", [])
@@ -302,13 +295,9 @@ class EauIDFClient:
             raise AuthenticationError("Could not extract CSRF token after login")
 
         # Extract communityApp loaded hash
-        match = re.search(
-            r'"APPLICATION@markup://siteforce:communityApp"\s*:\s*"([^"]+)"', html
-        )
+        match = re.search(r'"APPLICATION@markup://siteforce:communityApp"\s*:\s*"([^"]+)"', html)
         if match:
-            self._app_loaded = {
-                "APPLICATION@markup://siteforce:communityApp": match.group(1)
-            }
+            self._app_loaded = {"APPLICATION@markup://siteforce:communityApp": match.group(1)}
 
         # Update fwuid if available
         match = re.search(r'"fwuid"\s*:\s*"([^"]+)"', html)
@@ -332,14 +321,15 @@ class EauIDFClient:
             return result
         return []
 
-    def get_contract_details(self, contract_id: str) -> dict:
+    def get_contract_details(self, contract_id: str) -> dict[str, Any]:
         """Get details for a contract including meter number and PDS ID."""
         self._ensure_authenticated()
-        return self._apex_action(
+        result: dict[str, Any] = self._apex_action(
             "LTN008_ICL_ContratDetails",
             "getContratDetails",
             params={"contratId": contract_id},
         )
+        return result
 
     def get_daily_consumption(
         self,

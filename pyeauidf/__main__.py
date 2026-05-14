@@ -16,12 +16,14 @@ def main() -> None:
         description="Fetch water consumption from L'eau d'Île-de-France",
     )
     parser.add_argument(
-        "-u", "--username",
+        "-u",
+        "--username",
         default=os.environ.get("EAUIDF_USERNAME"),
         help="Account email (or set EAUIDF_USERNAME)",
     )
     parser.add_argument(
-        "-p", "--password",
+        "-p",
+        "--password",
         default=os.environ.get("EAUIDF_PASSWORD"),
         help="Account password (or set EAUIDF_PASSWORD)",
     )
@@ -75,7 +77,8 @@ def main() -> None:
             print(f"  {'─' * 12} {'─' * 8} {'─' * 12} {'─' * 5}")
             for r in records:
                 est = "yes" if r.is_estimated else ""
-                print(f"  {r.date:%Y-%m-%d}   {r.consumption_liters:7.0f}  {r.meter_reading:11.3f}  {est:>4}")
+                row = f"  {r.date:%Y-%m-%d}   {r.consumption_liters:7.0f}  {r.meter_reading:11.3f}  {est:>4}"
+                print(row)
 
             print(f"  {'─' * 12} {'─' * 8} {'─' * 12}")
             print(f"  {'Total':<12} {total_liters:7.0f}L")
