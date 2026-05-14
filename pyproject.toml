@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyeauidf"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Python client for L'eau d'Ile-de-France (SEDIF) water consumption data"
 readme = "README.md"
 license = "Apache-2.0"
@@ -34,6 +34,8 @@ pyeauidf = "pyeauidf.__main__:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "responses"]
+
+[tool.setuptools_scm]
 
 [tool.setuptools.package-data]
 pyeauidf = ["gandi_intermediate.pem"]
