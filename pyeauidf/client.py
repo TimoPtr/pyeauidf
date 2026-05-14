@@ -5,14 +5,14 @@ from __future__ import annotations
 import enum
 import json
 import re
-import tempfile
+import ssl
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
+import aiohttp
 import certifi
-import requests
 
 BASE_URL = "https://connexion.leaudiledefrance.fr"
 _INTERMEDIATE_CERT = Path(__file__).parent / "gandi_intermediate.pem"
@@ -22,8 +22,26 @@ LOGIN_URL = f"{BASE_URL}/s/login/"
 LOGIN_APP = "siteforce:loginApp2"
 COMMUNITY_APP = "siteforce:communityApp"
 
+_LOGIN_APP2_RE = re.compile(
+    r'"APPLICATION@markup://siteforce:loginApp2"\s*:\s*"([^"]+)"',
+)
+_COMMUNITY_APP_RE = re.compile(
+    r'"APPLICATION@markup://siteforce:communityApp"\s*:\s*"([^"]+)"',
+)
+_FWUID_RE = re.compile(r'"fwuid"\s*:\s*"([^"]+)"')
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/145.0.0.0 Safari/537.36"
+)
+
+_ESTIMATION_TRUTHY = frozenset(("true", "1", "yes"))
+
 
 class TimeStep(enum.StrEnum):
+    """Time granularity for consumption queries."""
+
     DAILY = "JOURNEE"
     WEEKLY = "SEMAINE"
     MONTHLY = "MOIS"
@@ -31,6 +49,8 @@ class TimeStep(enum.StrEnum):
 
 @dataclass
 class ConsumptionRecord:
+    """A single consumption measurement returned by the API."""
+
     date: datetime
     consumption_liters: float
     meter_reading: float
@@ -38,92 +58,93 @@ class ConsumptionRecord:
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> ConsumptionRecord:
+        """Parse a raw API record dict into a ConsumptionRecord."""
         return cls(
-            date=datetime.strptime(raw["DATE_INDEX"], "%Y-%m-%d %H:%M:%S"),
+            date=datetime.strptime(
+                raw["DATE_INDEX"],
+                "%Y-%m-%d %H:%M:%S",
+            ).replace(tzinfo=UTC),
             consumption_liters=float(raw["CONSOMMATION"]) * 1000,
             meter_reading=float(raw["VALEUR_INDEX"]),
-            is_estimated=str(raw.get("FLAG_ESTIMATION", "")).lower() in ("true", "1", "yes"),
+            is_estimated=str(raw.get("FLAG_ESTIMATION", "")).lower()
+            in _ESTIMATION_TRUTHY,
         )
 
 
 class EauIDFError(Exception):
-    pass
+    """Base exception for pyeauidf errors."""
 
 
 class AuthenticationError(EauIDFError):
-    pass
+    """Raised when authentication with the portal fails."""
 
 
-def _build_ca_bundle() -> str:
-    """Create a CA bundle with the missing Gandi intermediate cert."""
-    intermediate = _INTERMEDIATE_CERT.read_text()
-    roots = Path(certifi.where()).read_text()
-    bundle = tempfile.NamedTemporaryFile(suffix=".pem", prefix="pyeauidf_ca_", delete=False)
-    bundle.write((intermediate + "\n" + roots).encode())
-    bundle.close()
-    return bundle.name
+def _build_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context with the missing Gandi intermediate cert."""
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    ctx.load_verify_locations(cafile=str(_INTERMEDIATE_CERT))
+    return ctx
 
 
-_CA_BUNDLE = _build_ca_bundle()
+_SSL_CONTEXT = _build_ssl_context()
 
 
 class EauIDFClient:
     """Client to fetch water consumption data from L'eau d'Ile-de-France."""
 
-    def __init__(self, username: str, password: str) -> None:
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        session: aiohttp.ClientSession | None = None,
+    ) -> None:
+        """Initialize the client with credentials and an optional session."""
         self._username = username
         self._password = password
-        self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/145.0.0.0 Safari/537.36"
-                ),
-                "Origin": "https://connexion.leaudiledefrance.fr",
-            }
+        self._external_session = session is not None
+        self._session = session or aiohttp.ClientSession(
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Origin": BASE_URL,
+            },
         )
-        # The server doesn't send the intermediate CA cert, so we use
-        # a custom CA bundle: certifi roots + the bundled Gandi intermediate.
-        self._session.verify = _CA_BUNDLE
         self._fwuid: str | None = None
         self._aura_token: str | None = None
         self._app_loaded: dict[str, str] | None = None
         self._authenticated = False
 
-    def _get_login_context(self) -> None:
+    async def _get_login_context(self) -> None:
         """Fetch the login page to extract fwuid and app context."""
-        resp = self._session.get(LOGIN_URL)
-        resp.raise_for_status()
-        html = resp.text
+        async with self._session.get(LOGIN_URL, ssl=_SSL_CONTEXT) as resp:
+            resp.raise_for_status()
+            html = await resp.text()
 
-        # Extract fwuid from the page scripts
-        match = re.search(r'"fwuid"\s*:\s*"([^"]+)"', html)
+        match = _FWUID_RE.search(html)
         if match:
             self._fwuid = match.group(1)
 
-        # Extract the loginApp2 loaded hash
-        match = re.search(r'"APPLICATION@markup://siteforce:loginApp2"\s*:\s*"([^"]+)"', html)
+        match = _LOGIN_APP2_RE.search(html)
         if match:
-            self._app_loaded = {"APPLICATION@markup://siteforce:loginApp2": match.group(1)}
+            self._app_loaded = {
+                "APPLICATION@markup://siteforce:loginApp2": match.group(1),
+            }
 
         if not self._fwuid:
-            raise AuthenticationError("Could not extract fwuid from login page")
+            msg = "Could not extract fwuid from login page"
+            raise AuthenticationError(msg)
 
     def _extract_aura_token(self) -> str | None:
-        """Extract the CSRF token from the __Host-ERIC cookie set by Salesforce."""
-        for cookie in self._session.cookies:
-            if "ERIC" in cookie.name:
+        """Extract the CSRF token from the __Host-ERIC cookie."""
+        for cookie in self._session.cookie_jar:
+            if "ERIC" in cookie.key:
                 return cookie.value
         return None
 
-    def _build_aura_context(self, app: str = COMMUNITY_APP) -> dict[str, Any]:
-        loaded: dict[str, str] = {}
-        if self._app_loaded:
-            # Reuse whatever loaded hash we have
-            for k, v in self._app_loaded.items():
-                loaded[k] = v
+    def _build_aura_context(
+        self,
+        app: str = COMMUNITY_APP,
+    ) -> dict[str, Any]:
+        loaded = dict(self._app_loaded) if self._app_loaded else {}
         return {
             "mode": "PROD",
             "fwuid": self._fwuid,
@@ -134,14 +155,13 @@ class EauIDFClient:
             "uad": True,
         }
 
-    def _aura_call_raw(
+    async def _aura_call_raw(
         self,
         actions: list[dict[str, Any]],
         app: str = COMMUNITY_APP,
         page_uri: str = "/espace-particuliers/s/",
     ) -> dict[str, Any]:
         """Make an Aura API call and return the full JSON response."""
-        # Build query string descriptor hints
         descriptors = []
         for a in actions:
             desc = a.get("descriptor", "")
@@ -152,7 +172,7 @@ class EauIDFClient:
                 descriptors.append(f"other.{short}=1")
 
         query_parts = ["r=0"]
-        seen = set()
+        seen: set[str] = set()
         for d in descriptors:
             if d not in seen:
                 query_parts.append(d)
@@ -160,21 +180,31 @@ class EauIDFClient:
 
         url = f"{AURA_URL}?{'&'.join(query_parts)}"
 
-        resp = self._session.post(
-            url,
-            data={
-                "message": json.dumps({"actions": actions}),
-                "aura.context": json.dumps(self._build_aura_context(app)),
-                "aura.pageURI": page_uri,
-                "aura.token": self._aura_token or "undefined",
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+        data = aiohttp.FormData()
+        data.add_field("message", json.dumps({"actions": actions}))
+        data.add_field(
+            "aura.context",
+            json.dumps(self._build_aura_context(app)),
         )
-        resp.raise_for_status()
+        data.add_field("aura.pageURI", page_uri)
+        data.add_field("aura.token", self._aura_token or "undefined")
 
-        result: dict[str, Any] = resp.json()
+        headers = {
+            "Content-Type": (
+                "application/x-www-form-urlencoded; charset=UTF-8"
+            ),
+        }
+        async with self._session.post(
+            url,
+            data=data,
+            headers=headers,
+            ssl=_SSL_CONTEXT,
+        ) as resp:
+            resp.raise_for_status()
+            result: dict[str, Any] = await resp.json(
+                content_type=None,
+            )
 
-        # Update context if returned
         ctx = result.get("context", {})
         if ctx.get("fwuid"):
             self._fwuid = ctx["fwuid"]
@@ -184,16 +214,17 @@ class EauIDFClient:
 
         return result
 
-    def _aura_call(
+    async def _aura_call(
         self,
         actions: list[dict[str, Any]],
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Make an Aura API call and return just the action results."""
-        result: list[dict[str, Any]] = self._aura_call_raw(actions, **kwargs).get("actions", [])
+        raw = await self._aura_call_raw(actions, **kwargs)
+        result: list[dict[str, Any]] = raw.get("actions", [])
         return result
 
-    def _apex_action(
+    async def _apex_action(
         self,
         classname: str,
         method: str,
@@ -218,29 +249,31 @@ class EauIDFClient:
             "params": action_params,
         }
 
-        results = self._aura_call([action], **kwargs)
+        results = await self._aura_call([action], **kwargs)
         if not results:
-            raise EauIDFError(f"No response for {classname}.{method}")
+            msg = f"No response for {classname}.{method}"
+            raise EauIDFError(msg)
 
         result = results[0]
         if result.get("state") != "SUCCESS":
             error = result.get("error", [])
-            raise EauIDFError(f"{classname}.{method} failed: {error}")
+            msg = f"{classname}.{method} failed: {error}"
+            raise EauIDFError(msg)
 
         rv = result.get("returnValue", {})
-        # Apex actions wrap in an extra returnValue
         if isinstance(rv, dict) and "returnValue" in rv:
             return rv["returnValue"]
         return rv
 
-    def login(self) -> None:
+    async def login(self) -> None:
         """Authenticate with the L'eau d'Ile-de-France portal."""
-        self._get_login_context()
+        await self._get_login_context()
 
-        # Call the Aura login action
         action = {
             "id": "1;a",
-            "descriptor": "apex://LightningLoginFormController/ACTION$login",
+            "descriptor": (
+                "apex://LightningLoginFormController/ACTION$login"
+            ),
             "callingDescriptor": "UNKNOWN",
             "params": {
                 "username": self._username,
@@ -249,7 +282,7 @@ class EauIDFClient:
             },
         }
 
-        response = self._aura_call_raw(
+        response = await self._aura_call_raw(
             [action],
             app=LOGIN_APP,
             page_uri="/espace-particuliers/s/login",
@@ -259,17 +292,20 @@ class EauIDFClient:
         if actions:
             result = actions[0]
             if result.get("state") != "SUCCESS":
-                raise AuthenticationError(f"Login failed: {result.get('error', [])}")
-            # returnValue is an error message on failure, None on success
+                msg = f"Login failed: {result.get('error', [])}"
+                raise AuthenticationError(msg)
             return_value = result.get("returnValue")
             if isinstance(return_value, str) and return_value:
-                raise AuthenticationError(f"Login failed: {return_value}")
+                msg = f"Login failed: {return_value}"
+                raise AuthenticationError(msg)
 
-        self._complete_login(response)
+        await self._complete_login(response)
 
-    def _complete_login(self, login_response: dict[str, Any]) -> None:
+    async def _complete_login(
+        self,
+        login_response: dict[str, Any],
+    ) -> None:
         """Follow the frontdoor redirect and extract session tokens."""
-        # Extract the redirect URL from aura:clientRedirect event
         events = login_response.get("events", [])
         redirect_url = None
         for event in events:
@@ -278,42 +314,49 @@ class EauIDFClient:
                 break
 
         if not redirect_url:
-            raise AuthenticationError("No redirect URL in login response")
+            msg = "No redirect URL in login response"
+            raise AuthenticationError(msg)
 
-        # Follow frontdoor.jsp to establish session cookies (sid, etc.)
-        resp = self._session.get(redirect_url)
-        resp.raise_for_status()
+        async with self._session.get(
+            redirect_url,
+            ssl=_SSL_CONTEXT,
+        ) as resp:
+            resp.raise_for_status()
 
-        # Load the authenticated community page to get the app context
-        resp = self._session.get(f"{BASE_URL}/s/")
-        resp.raise_for_status()
-        html = resp.text
+        async with self._session.get(
+            f"{BASE_URL}/s/",
+            ssl=_SSL_CONTEXT,
+        ) as resp:
+            resp.raise_for_status()
+            html = await resp.text()
 
-        # Extract the CSRF token from the __Host-ERIC cookie
         self._aura_token = self._extract_aura_token()
         if not self._aura_token:
-            raise AuthenticationError("Could not extract CSRF token after login")
+            msg = "Could not extract CSRF token after login"
+            raise AuthenticationError(msg)
 
-        # Extract communityApp loaded hash
-        match = re.search(r'"APPLICATION@markup://siteforce:communityApp"\s*:\s*"([^"]+)"', html)
+        match = _COMMUNITY_APP_RE.search(html)
         if match:
-            self._app_loaded = {"APPLICATION@markup://siteforce:communityApp": match.group(1)}
+            self._app_loaded = {
+                "APPLICATION@markup://siteforce:communityApp": (
+                    match.group(1)
+                ),
+            }
 
-        # Update fwuid if available
-        match = re.search(r'"fwuid"\s*:\s*"([^"]+)"', html)
+        match = _FWUID_RE.search(html)
         if match:
             self._fwuid = match.group(1)
 
         self._authenticated = True
 
-    def _ensure_authenticated(self) -> None:
+    async def _ensure_authenticated(self) -> None:
         if not self._authenticated:
-            self.login()
+            await self.login()
 
-    def get_contracts(self) -> list[str]:
+    async def get_contracts(self) -> list[str]:
         """Get list of active contract IDs."""
-        self._ensure_authenticated()
-        result = self._apex_action(
+        await self._ensure_authenticated()
+        result = await self._apex_action(
             "LTN009_ICL_ContratsGroupements",
             "listCurrentUserActiveContrats",
         )
@@ -321,55 +364,52 @@ class EauIDFClient:
             return result
         return []
 
-    def get_contract_details(self, contract_id: str) -> dict[str, Any]:
+    async def get_contract_details(
+        self,
+        contract_id: str,
+    ) -> dict[str, Any]:
         """Get details for a contract including meter number and PDS ID."""
-        self._ensure_authenticated()
-        result: dict[str, Any] = self._apex_action(
+        await self._ensure_authenticated()
+        result: dict[str, Any] = await self._apex_action(
             "LTN008_ICL_ContratDetails",
             "getContratDetails",
             params={"contratId": contract_id},
         )
         return result
 
-    def get_daily_consumption(
+    async def get_daily_consumption(
         self,
         contract_id: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
         time_step: TimeStep = TimeStep.DAILY,
     ) -> list[ConsumptionRecord]:
-        """
-        Fetch water consumption history.
-
-        If contract_id is not provided, uses the first active contract.
-        Defaults to last 90 days if dates are not specified.
-        """
-        self._ensure_authenticated()
+        """Fetch water consumption history."""
+        await self._ensure_authenticated()
 
         if end_date is None:
-            end_date = date.today()
+            end_date = datetime.now(tz=UTC).date()
         if start_date is None:
             start_date = end_date - timedelta(days=90)
 
-        # Get contract ID if not provided
         if contract_id is None:
-            contracts = self.get_contracts()
+            contracts = await self.get_contracts()
             if not contracts:
-                raise EauIDFError("No active contracts found")
+                msg = "No active contracts found"
+                raise EauIDFError(msg)
             contract_id = contracts[0]
 
-        # Get contract details for meter number and PDS ID
-        details = self.get_contract_details(contract_id)
+        details = await self.get_contract_details(contract_id)
         compte_info = details.get("compteInfo", [])
         if not compte_info:
-            raise EauIDFError("No meter information found for contract")
+            msg = "No meter information found for contract"
+            raise EauIDFError(msg)
 
         meter = compte_info[0]
         numero_compteur = meter["ELEMB"]
         id_pds = meter["ELEMA"]
 
-        # Fetch consumption data
-        result = self._apex_action(
+        result = await self._apex_action(
             "LTN015_ICL_ContratConsoHisto",
             "getData",
             params={
@@ -383,18 +423,21 @@ class EauIDFClient:
             page_uri="/espace-particuliers/s/historique",
         )
 
-        records = []
         data = result.get("data", {})
-        for raw in data.get("CONSOMMATION", []):
-            records.append(ConsumptionRecord.from_api(raw))
+        records = [
+            ConsumptionRecord.from_api(raw)
+            for raw in data.get("CONSOMMATION", [])
+        ]
 
         return records
 
-    def close(self) -> None:
-        self._session.close()
+    async def close(self) -> None:
+        """Close the HTTP session (only if we created it)."""
+        if not self._external_session:
+            await self._session.close()
 
-    def __enter__(self) -> EauIDFClient:
+    async def __aenter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
-        self.close()
+    async def __aexit__(self, *args: object) -> None:
+        await self.close()

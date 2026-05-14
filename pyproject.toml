@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Home Automation",
 ]
-dependencies = ["requests>=2.28", "certifi"]
+dependencies = ["aiohttp>=3.9", "certifi"]
 
 [project.urls]
 Homepage = "https://github.com/TimoPtr/pyeauidf"
@@ -33,14 +33,40 @@ Issues = "https://github.com/TimoPtr/pyeauidf/issues"
 pyeauidf = "pyeauidf.__main__:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "responses", "ruff", "mypy", "types-requests"]
+dev = ["pytest", "pytest-asyncio", "aioresponses", "ruff", "mypy"]
 
 [tool.ruff]
 target-version = "py314"
-line-length = 110
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["ALL"]
+ignore = [
+    "ANN401", # Dynamically typed expressions (typing.Any) are disallowed
+    "D203", # no-blank-line-before-class (incompatible with formatter)
+    "D212", # multi-line-summary-first-line (incompatible with formatter)
+    "D105", # missing docstring in magic method (standard protocol methods)
+    "COM812", # incompatible with formatter
+    "ISC001", # incompatible with formatter
+    "EM101",  # exception message string literal (overly pedantic)
+    "EM102",  # exception message f-string literal (overly pedantic)
+    "TRY003", # long messages in raise (overly pedantic)
+    "TCH001", # move stdlib import into TYPE_CHECKING (adds complexity)
+    "TCH002", # move third-party import into TYPE_CHECKING (adds complexity)
+    "RET504", # unnecessary assignment before return (used for mypy type narrowing)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"pyeauidf/__main__.py" = ["T201"]
+"tests/**" = ["S101", "SLF001", "D"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
 
 [tool.mypy]
 python_version = "3.14"

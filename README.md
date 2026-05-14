@@ -20,7 +20,7 @@ A ready-to-use Home Assistant integration built on top of this library is availa
 pip install .
 ```
 
-Requires Python 3.10+ and `requests`.
+Requires Python 3.10+ and `aiohttp`.
 
 ## Usage
 
@@ -45,26 +45,30 @@ pyeauidf
 ### Python
 
 ```python
+import asyncio
 from pyeauidf import EauIDFClient
 from pyeauidf.client import TimeStep
 from datetime import date, timedelta
 
-with EauIDFClient("email@example.com", "password") as client:
-    client.login()
+async def main():
+    async with EauIDFClient("email@example.com", "password") as client:
+        await client.login()
 
-    # Daily consumption (last 90 days by default)
-    records = client.get_daily_consumption()
-    for r in records:
-        print(f"{r.date:%Y-%m-%d}: {r.consumption_liters:.0f}L")
+        # Daily consumption (last 90 days by default)
+        records = await client.get_daily_consumption()
+        for r in records:
+            print(f"{r.date:%Y-%m-%d}: {r.consumption_liters:.0f}L")
 
-    # Weekly or monthly
-    records = client.get_daily_consumption(time_step=TimeStep.WEEKLY)
+        # Weekly or monthly
+        records = await client.get_daily_consumption(time_step=TimeStep.WEEKLY)
 
-    # Custom date range
-    records = client.get_daily_consumption(
-        start_date=date(2026, 1, 1),
-        end_date=date(2026, 3, 1),
-    )
+        # Custom date range
+        records = await client.get_daily_consumption(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 3, 1),
+        )
+
+asyncio.run(main())
 ```
 
 ### Data model
