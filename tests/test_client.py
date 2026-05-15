@@ -1,11 +1,13 @@
 import re
 from datetime import UTC, datetime
 
+import aiohttp
 import pytest
 from aioresponses import aioresponses
 from yarl import URL
 
 from pyeauidf.client import (
+    _USER_AGENT,
     BASE_URL,
     LOGIN_URL,
     AuthenticationError,
@@ -291,3 +293,64 @@ async def test_login_raises_when_no_redirect() -> None:
 
             with pytest.raises(AuthenticationError, match="redirect"):
                 await client.login()
+
+
+# ---------------------------------------------------------------------------
+# Headers with external session
+# ---------------------------------------------------------------------------
+
+
+def _get_request_headers(
+    mock: aioresponses,
+    method: str,
+    url_pattern: re.Pattern[str],
+) -> dict[str, str]:
+    """Extract headers from the first matching request in the mock."""
+    for (req_method, req_url), calls in mock.requests.items():
+        if req_method == method and url_pattern.search(str(req_url)):
+            return dict(calls[0].kwargs.get("headers", {}))
+    msg = f"No {method} request matching {url_pattern.pattern}"
+    raise AssertionError(msg)
+
+
+@pytest.mark.asyncio
+async def test_external_session_sends_origin_and_user_agent_on_get() -> None:
+    external = aiohttp.ClientSession()
+    try:
+        async with EauIDFClient("user", "pass", session=external) as client:
+            with aioresponses() as m:
+                m.get(LOGIN_URL, body=_LOGIN_HTML, status=200)
+                await client._get_login_context()
+
+                headers = _get_request_headers(
+                    m,
+                    "GET",
+                    re.compile(re.escape(LOGIN_URL)),
+                )
+                assert headers.get("User-Agent") == _USER_AGENT
+                assert headers.get("Origin") == BASE_URL
+    finally:
+        await external.close()
+
+
+@pytest.mark.asyncio
+async def test_external_session_sends_origin_and_user_agent_on_post() -> None:
+    external = aiohttp.ClientSession()
+    try:
+        async with EauIDFClient("user", "pass", session=external) as client:
+            client._authenticated = True
+            client._fwuid = "fw1"
+            with aioresponses() as m:
+                m.post(
+                    AURA_URL_RE,
+                    payload=_AURA_RESPONSE_SUCCESS,
+                    status=200,
+                    repeat=True,
+                )
+                await client._apex_action("SomeClass", "someMethod")
+
+                headers = _get_request_headers(m, "POST", AURA_URL_RE)
+                assert headers.get("User-Agent") == _USER_AGENT
+                assert headers.get("Origin") == BASE_URL
+    finally:
+        await external.close()
