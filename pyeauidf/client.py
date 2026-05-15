@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 import json
+import logging
 import re
 import ssl
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from typing import Any, Self
 
 import aiohttp
 import certifi
+
+_LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://connexion.leaudiledefrance.fr"
 _INTERMEDIATE_CERT = Path(__file__).parent / "gandi_intermediate.pem"
@@ -89,6 +92,15 @@ def _build_ssl_context() -> ssl.SSLContext:
 _SSL_CONTEXT = _build_ssl_context()
 
 
+def _strip_aura_wrapper(text: str) -> str:
+    """Strip Salesforce Aura's CSRF wrappers from JSON responses."""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1:
+        return text[start : end + 1]
+    return text
+
+
 class EauIDFClient:
     """Client to fetch water consumption data from L'eau d'Ile-de-France."""
 
@@ -102,12 +114,11 @@ class EauIDFClient:
         self._username = username
         self._password = password
         self._external_session = session is not None
-        self._session = session or aiohttp.ClientSession(
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Origin": BASE_URL,
-            },
-        )
+        self._session = session or aiohttp.ClientSession()
+        self._default_headers = {
+            "User-Agent": _USER_AGENT,
+            "Origin": BASE_URL,
+        }
         self._fwuid: str | None = None
         self._aura_token: str | None = None
         self._app_loaded: dict[str, str] | None = None
@@ -115,7 +126,10 @@ class EauIDFClient:
 
     async def _get_login_context(self) -> None:
         """Fetch the login page to extract fwuid and app context."""
-        async with self._session.get(LOGIN_URL, ssl=_SSL_CONTEXT) as resp:
+        _LOGGER.debug("Fetching login page at %s", LOGIN_URL)
+        async with self._session.get(
+            LOGIN_URL, ssl=_SSL_CONTEXT, headers=self._default_headers
+        ) as resp:
             resp.raise_for_status()
             html = await resp.text()
 
@@ -130,6 +144,9 @@ class EauIDFClient:
             }
 
         if not self._fwuid:
+            _LOGGER.debug(
+                "Login page response length: %d, no fwuid found", len(html)
+            )
             msg = "Could not extract fwuid from login page"
             raise AuthenticationError(msg)
 
@@ -190,18 +207,30 @@ class EauIDFClient:
         data.add_field("aura.token", self._aura_token or "undefined")
 
         headers = {
+            **self._default_headers,
             "Content-Type": ("application/x-www-form-urlencoded; charset=UTF-8"),
         }
+        _LOGGER.debug("Aura call to %s", url)
         async with self._session.post(
             url,
             data=data,
             headers=headers,
             ssl=_SSL_CONTEXT,
         ) as resp:
-            resp.raise_for_status()
-            result: dict[str, Any] = await resp.json(
-                content_type=None,
+            _LOGGER.debug(
+                "Aura response: status=%s, content-type=%s",
+                resp.status,
+                resp.content_type,
             )
+            resp.raise_for_status()
+            text = await resp.text()
+            _LOGGER.debug(
+                "Aura response body (%d chars): %.500s",
+                len(text),
+                text,
+            )
+            text = _strip_aura_wrapper(text)
+            result: dict[str, Any] = json.loads(text)
 
         ctx = result.get("context", {})
         if ctx.get("fwuid"):
@@ -265,6 +294,7 @@ class EauIDFClient:
 
     async def login(self) -> None:
         """Authenticate with the L'eau d'Ile-de-France portal."""
+        _LOGGER.debug("Starting login for %s", self._username)
         await self._get_login_context()
 
         action = {
@@ -288,14 +318,17 @@ class EauIDFClient:
         if actions:
             result = actions[0]
             if result.get("state") != "SUCCESS":
+                _LOGGER.debug("Login action state: %s", result.get("state"))
                 msg = f"Login failed: {result.get('error', [])}"
                 raise AuthenticationError(msg)
             return_value = result.get("returnValue")
             if isinstance(return_value, str) and return_value:
+                _LOGGER.debug("Login returned error value: %s", return_value)
                 msg = f"Login failed: {return_value}"
                 raise AuthenticationError(msg)
 
         await self._complete_login(response)
+        _LOGGER.debug("Login successful for %s", self._username)
 
     async def _complete_login(
         self,
@@ -313,21 +346,25 @@ class EauIDFClient:
             msg = "No redirect URL in login response"
             raise AuthenticationError(msg)
 
+        _LOGGER.debug("Following frontdoor redirect")
         async with self._session.get(
             redirect_url,
             ssl=_SSL_CONTEXT,
+            headers=self._default_headers,
         ) as resp:
             resp.raise_for_status()
 
         async with self._session.get(
             f"{BASE_URL}/s/",
             ssl=_SSL_CONTEXT,
+            headers=self._default_headers,
         ) as resp:
             resp.raise_for_status()
             html = await resp.text()
 
         self._aura_token = self._extract_aura_token()
         if not self._aura_token:
+            _LOGGER.debug("No CSRF token found in cookies")
             msg = "Could not extract CSRF token after login"
             raise AuthenticationError(msg)
 
