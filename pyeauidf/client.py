@@ -144,9 +144,7 @@ class EauIDFClient:
             }
 
         if not self._fwuid:
-            _LOGGER.debug(
-                "Login page response length: %d, no fwuid found", len(html)
-            )
+            _LOGGER.debug("Login page response length: %d, no fwuid found", len(html))
             msg = "Could not extract fwuid from login page"
             raise AuthenticationError(msg)
 
