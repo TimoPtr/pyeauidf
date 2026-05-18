@@ -25,34 +25,37 @@ async def _async_main(args: argparse.Namespace) -> None:
         end = dt.now(tz=UTC).date()
         start = end - timedelta(days=args.days)
 
-        records = await client.get_daily_consumption(
+        result = await client.get_daily_consumption(
             start_date=start,
             end_date=end,
             time_step=step_map[args.step],
         )
 
-        if not records:
+        if not result.records:
             print("No consumption data found for the given period.")
             return
 
-        total_liters = sum(r.consumption_liters for r in records)
+        total_liters = sum(r.consumption_liters for r in result.records)
 
         print(f"Water consumption ({start} to {end}, {args.step}):\n")
         print(
-            f"  {'Date':<12} {'Liters':>8} {'Meter (m³)':>12} {'Est.':>5}",
+            f"  {'Date':<12} {'Liters':>8}"
+            f" {'Cost (€)':>9} {'Meter (m³)':>12} {'Est.':>5}",
         )
-        print(f"  {'─' * 12} {'─' * 8} {'─' * 12} {'─' * 5}")
-        for r in records:
+        print(f"  {'─' * 12} {'─' * 8} {'─' * 9} {'─' * 12} {'─' * 5}")
+        for r in result.records:
             est = "yes" if r.is_estimated else ""
             print(
                 f"  {r.date:%Y-%m-%d}"
                 f"   {r.consumption_liters:7.0f}"
+                f"  {result.daily_cost(r):8.2f}"
                 f"  {r.meter_reading:11.3f}"
                 f"  {est:>4}",
             )
 
-        print(f"  {'─' * 12} {'─' * 8} {'─' * 12}")
-        print(f"  {'Total':<12} {total_liters:7.0f}L")
+        print(f"  {'─' * 12} {'─' * 8} {'─' * 9} {'─' * 12}")
+        print(f"  {'Total':<12} {total_liters:7.0f}L {result.total_cost:8.2f} €")
+        print(f"\n  Price: {result.price_per_m3:.4f} €/m³")
 
 
 def main() -> None:

@@ -48,22 +48,26 @@ pyeauidf
 import asyncio
 from pyeauidf import EauIDFClient
 from pyeauidf.client import TimeStep
-from datetime import date, timedelta
+from datetime import date
 
 async def main():
     async with EauIDFClient("email@example.com", "password") as client:
         await client.login()
 
         # Daily consumption (last 90 days by default)
-        records = await client.get_daily_consumption()
-        for r in records:
-            print(f"{r.date:%Y-%m-%d}: {r.consumption_liters:.0f}L")
+        result = await client.get_daily_consumption()
+        for r in result.records:
+            cost = result.daily_cost(r)
+            print(f"{r.date:%Y-%m-%d}: {r.consumption_liters:.0f}L — {cost:.2f}€")
+
+        # Total cost
+        print(f"Total: {result.total_cost:.2f}€ ({result.price_per_m3:.4f} €/m³)")
 
         # Weekly or monthly
-        records = await client.get_daily_consumption(time_step=TimeStep.WEEKLY)
+        result = await client.get_daily_consumption(time_step=TimeStep.WEEKLY)
 
         # Custom date range
-        records = await client.get_daily_consumption(
+        result = await client.get_daily_consumption(
             start_date=date(2026, 1, 1),
             end_date=date(2026, 3, 1),
         )
@@ -72,6 +76,15 @@ asyncio.run(main())
 ```
 
 ### Data model
+
+`get_daily_consumption()` returns a `ConsumptionData` object:
+
+| Field | Type | Description |
+|---|---|---|
+| `records` | `list[ConsumptionRecord]` | Individual consumption measurements |
+| `price_per_m3` | `float` | Average water price (€/m³) |
+| `daily_cost(record)` | `float` | Cost in euros for a single record |
+| `total_cost` | `float` | Total cost in euros for all records |
 
 Each `ConsumptionRecord` contains:
 

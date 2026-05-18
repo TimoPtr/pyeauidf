@@ -57,7 +57,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "pyeauidf/__main__.py" = ["T201"]
-"tests/**" = ["S101", "SLF001", "D"]
+"tests/**" = ["S101", "SLF001", "D", "PLR2004"]
 
 [tool.ruff.lint.flake8-pytest-style]
 fixture-parentheses = false
@@ -67,6 +67,10 @@ keep-runtime-typing = true
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+addopts = ["-p", "no:aiohttp", "-p", "no:homeassistant"]
 
 [tool.mypy]
 python_version = "3.14"
