@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import aiohttp
 import pytest
@@ -11,6 +11,7 @@ from pyeauidf.client import (
     BASE_URL,
     LOGIN_URL,
     AuthenticationError,
+    ConsumptionData,
     ConsumptionRecord,
     EauIDFClient,
     EauIDFError,
@@ -354,3 +355,179 @@ async def test_external_session_sends_origin_and_user_agent_on_post() -> None:
                 assert headers.get("Origin") == BASE_URL
     finally:
         await external.close()
+
+
+# ---------------------------------------------------------------------------
+# get_daily_consumption → ConsumptionData
+# ---------------------------------------------------------------------------
+
+_CONTRACTS_RESPONSE = {
+    "actions": [
+        {"state": "SUCCESS", "returnValue": {"returnValue": ["contract-1"]}},
+    ],
+}
+
+_CONTRACT_DETAILS_RESPONSE = {
+    "actions": [
+        {
+            "state": "SUCCESS",
+            "returnValue": {
+                "returnValue": {
+                    "compteInfo": [{"ELEMB": "CTR-001", "ELEMA": "PDS-001"}],
+                },
+            },
+        },
+    ],
+}
+
+_GET_DATA_RESPONSE = {
+    "actions": [
+        {
+            "state": "SUCCESS",
+            "returnValue": {
+                "returnValue": {
+                    "prixMoyenEau": 4.2345,
+                    "data": {
+                        "CONSOMMATION": [
+                            {
+                                "DATE_INDEX": "2024-03-15 00:00:00",
+                                "CONSOMMATION": "0.150",
+                                "VALEUR_INDEX": "100.000",
+                                "FLAG_ESTIMATION": "false",
+                            },
+                            {
+                                "DATE_INDEX": "2024-03-16 00:00:00",
+                                "CONSOMMATION": "0.200",
+                                "VALEUR_INDEX": "100.200",
+                                "FLAG_ESTIMATION": "true",
+                            },
+                        ],
+                        "CONSOMMATION_MAX": 0.250,
+                        "CONSOMMATION_MOYENNE": 0.175,
+                        "DATE_CONSOMMATION_MAX": "2024-03-16",
+                    },
+                },
+            },
+        },
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_consumption_returns_consumption_data() -> None:
+    async with EauIDFClient("user", "pass") as client:
+        client._authenticated = True
+        client._fwuid = "fw1"
+        with aioresponses() as m:
+            m.post(AURA_URL_RE, payload=_CONTRACTS_RESPONSE, status=200)
+            m.post(AURA_URL_RE, payload=_CONTRACT_DETAILS_RESPONSE, status=200)
+            m.post(AURA_URL_RE, payload=_GET_DATA_RESPONSE, status=200)
+
+            result = await client.get_daily_consumption(
+                start_date=date(2024, 3, 15),
+                end_date=date(2024, 3, 17),
+            )
+
+            assert isinstance(result, ConsumptionData)
+            assert len(result.records) == 2
+            assert result.records[0].consumption_liters == pytest.approx(150.0)
+            assert result.records[1].is_estimated is True
+            assert result.price_per_m3 == pytest.approx(4.2345)
+
+
+@pytest.mark.asyncio
+async def test_get_daily_consumption_no_contracts_raises() -> None:
+    async with EauIDFClient("user", "pass") as client:
+        client._authenticated = True
+        client._fwuid = "fw1"
+        with aioresponses() as m:
+            m.post(
+                AURA_URL_RE,
+                payload={
+                    "actions": [
+                        {"state": "SUCCESS", "returnValue": {"returnValue": []}},
+                    ],
+                },
+                status=200,
+            )
+
+            with pytest.raises(EauIDFError, match="No active contracts"):
+                await client.get_daily_consumption()
+
+
+@pytest.mark.asyncio
+async def test_get_daily_consumption_handles_missing_max_date() -> None:
+    response = {
+        "actions": [
+            {
+                "state": "SUCCESS",
+                "returnValue": {
+                    "returnValue": {
+                        "prixMoyenEau": 3.5,
+                        "data": {
+                            "CONSOMMATION": [],
+                            "CONSOMMATION_MAX": 0,
+                            "CONSOMMATION_MOYENNE": 0,
+                        },
+                    },
+                },
+            },
+        ],
+    }
+    async with EauIDFClient("user", "pass") as client:
+        client._authenticated = True
+        client._fwuid = "fw1"
+        with aioresponses() as m:
+            m.post(AURA_URL_RE, payload=_CONTRACTS_RESPONSE, status=200)
+            m.post(AURA_URL_RE, payload=_CONTRACT_DETAILS_RESPONSE, status=200)
+            m.post(AURA_URL_RE, payload=response, status=200)
+
+            result = await client.get_daily_consumption(
+                start_date=date(2024, 1, 1),
+                end_date=date(2024, 1, 2),
+            )
+
+            assert result.records == []
+            assert result.price_per_m3 == pytest.approx(3.5)
+
+
+# ---------------------------------------------------------------------------
+# ConsumptionData.daily_cost / total_cost
+# ---------------------------------------------------------------------------
+
+
+def test_daily_cost_computes_from_price_and_liters() -> None:
+    record = ConsumptionRecord(
+        date=datetime(2024, 5, 14, tzinfo=UTC),
+        consumption_liters=103.0,
+        meter_reading=100.0,
+        is_estimated=False,
+    )
+    data = ConsumptionData(
+        records=[record],
+        price_per_m3=4.6602,
+    )
+    assert data.daily_cost(record) == pytest.approx(0.48, abs=0.005)
+
+
+def test_total_cost_sums_all_records() -> None:
+    records = [
+        ConsumptionRecord(
+            date=datetime(2024, 5, 14, tzinfo=UTC),
+            consumption_liters=150.0,
+            meter_reading=100.0,
+            is_estimated=False,
+        ),
+        ConsumptionRecord(
+            date=datetime(2024, 5, 15, tzinfo=UTC),
+            consumption_liters=200.0,
+            meter_reading=100.2,
+            is_estimated=False,
+        ),
+    ]
+    data = ConsumptionData(
+        records=records,
+        price_per_m3=4.0,
+    )
+    # (0.150 + 0.200) * 4.0 = 1.40
+    assert data.total_cost == pytest.approx(1.40)

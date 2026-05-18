@@ -74,6 +74,23 @@ class ConsumptionRecord:
         )
 
 
+@dataclass
+class ConsumptionData:
+    """Full consumption response including records and metadata."""
+
+    records: list[ConsumptionRecord]
+    price_per_m3: float
+
+    def daily_cost(self, record: ConsumptionRecord) -> float:
+        """Compute the cost in euros for a single record."""
+        return (record.consumption_liters / 1000) * self.price_per_m3
+
+    @property
+    def total_cost(self) -> float:
+        """Total cost in euros for all records."""
+        return sum(self.daily_cost(r) for r in self.records)
+
+
 class EauIDFError(Exception):
     """Base exception for pyeauidf errors."""
 
@@ -412,7 +429,7 @@ class EauIDFClient:
         start_date: date | None = None,
         end_date: date | None = None,
         time_step: TimeStep = TimeStep.DAILY,
-    ) -> list[ConsumptionRecord]:
+    ) -> ConsumptionData:
         """Fetch water consumption history."""
         await self._ensure_authenticated()
 
@@ -457,7 +474,10 @@ class EauIDFClient:
             ConsumptionRecord.from_api(raw) for raw in data.get("CONSOMMATION", [])
         ]
 
-        return records
+        return ConsumptionData(
+            records=records,
+            price_per_m3=float(result.get("prixMoyenEau", 0)),
+        )
 
     async def close(self) -> None:
         """Close the HTTP session (only if we created it)."""
