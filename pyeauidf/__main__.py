@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Timothy (TimoPtr)
 """CLI entry point for pyeauidf."""
 
 from __future__ import annotations

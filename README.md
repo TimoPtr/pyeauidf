@@ -50,6 +50,7 @@ from pyeauidf import EauIDFClient
 from pyeauidf.client import TimeStep
 from datetime import date
 
+
 async def main():
     async with EauIDFClient("email@example.com", "password") as client:
         await client.login()
@@ -71,6 +72,7 @@ async def main():
             start_date=date(2026, 1, 1),
             end_date=date(2026, 3, 1),
         )
+
 
 asyncio.run(main())
 ```
