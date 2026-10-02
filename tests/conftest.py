@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Timothy (TimoPtr)
 """Shared pytest fixtures and third-party compatibility shims.
 
 aiohttp 3.14 made ``stream_writer`` a required keyword-only argument of

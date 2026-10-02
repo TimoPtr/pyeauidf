@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Timothy (TimoPtr)
 import re
 from datetime import UTC, date, datetime
 

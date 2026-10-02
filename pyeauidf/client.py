@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Timothy (TimoPtr)
 """Client for L'eau d'Ile-de-France (SEDIF) water consumption API."""
 
 from __future__ import annotations
