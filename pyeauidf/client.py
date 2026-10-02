@@ -60,19 +60,18 @@ class ConsumptionRecord:
     meter_reading: float
     is_estimated: bool
 
-    @classmethod
-    def from_api(cls, raw: dict[str, Any]) -> ConsumptionRecord:
-        """Parse a raw API record dict into a ConsumptionRecord."""
-        return cls(
-            date=datetime.strptime(
-                raw["DATE_INDEX"],
-                "%Y-%m-%d %H:%M:%S",
-            ).replace(tzinfo=UTC),
-            consumption_liters=float(raw["CONSOMMATION"]) * 1000,
-            meter_reading=float(raw["VALEUR_INDEX"]),
-            is_estimated=str(raw.get("FLAG_ESTIMATION", "")).lower()
-            in _ESTIMATION_TRUTHY,
-        )
+
+def _record_from_api(raw: dict[str, Any]) -> ConsumptionRecord:
+    """Parse a raw API record dict into a ConsumptionRecord."""
+    return ConsumptionRecord(
+        date=datetime.strptime(
+            raw["DATE_INDEX"],
+            "%Y-%m-%d %H:%M:%S",
+        ).replace(tzinfo=UTC),
+        consumption_liters=float(raw["CONSOMMATION"]) * 1000,
+        meter_reading=float(raw["VALEUR_INDEX"]),
+        is_estimated=str(raw.get("FLAG_ESTIMATION", "")).lower() in _ESTIMATION_TRUTHY,
+    )
 
 
 @dataclass
@@ -90,6 +89,16 @@ class ConsumptionData:
     def total_cost(self) -> float:
         """Total cost in euros for all records."""
         return sum(self.daily_cost(r) for r in self.records)
+
+
+@dataclass(frozen=True)
+class Contract:
+    """An active contract of the account."""
+
+    contract_id: str
+    """Opaque identifier used by the API; it can change over time."""
+    number: str
+    """Contract number shown to the customer; stable, use it as identifier."""
 
 
 class EauIDFError(Exception):
@@ -400,7 +409,7 @@ class EauIDFClient:
         if not self._authenticated:
             await self.login()
 
-    async def get_contracts(self) -> list[str]:
+    async def _get_contract_ids(self) -> list[str]:
         """Get list of active contract IDs."""
         await self._ensure_authenticated()
         result = await self._apex_action(
@@ -411,7 +420,7 @@ class EauIDFClient:
             return result
         return []
 
-    async def get_contract_details(
+    async def _get_contract_details(
         self,
         contract_id: str,
     ) -> dict[str, Any]:
@@ -424,14 +433,27 @@ class EauIDFClient:
         )
         return result
 
+    async def get_active_contracts(self) -> list[Contract]:
+        """Get the active contracts with their contract number."""
+        contracts = []
+        for contract_id in await self._get_contract_ids():
+            details = await self._get_contract_details(contract_id)
+            number = details.get("contrat", {}).get("Name", contract_id)
+            contracts.append(Contract(contract_id=contract_id, number=str(number)))
+        return contracts
+
     async def get_daily_consumption(
         self,
-        contract_id: str | None = None,
+        contract: Contract | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
         time_step: TimeStep = TimeStep.DAILY,
     ) -> ConsumptionData:
-        """Fetch water consumption history."""
+        """
+        Fetch water consumption history.
+
+        Uses the first active contract of the account when no contract is given.
+        """
         await self._ensure_authenticated()
 
         if end_date is None:
@@ -439,14 +461,16 @@ class EauIDFClient:
         if start_date is None:
             start_date = end_date - timedelta(days=90)
 
-        if contract_id is None:
-            contracts = await self.get_contracts()
-            if not contracts:
+        if contract is not None:
+            contract_id = contract.contract_id
+        else:
+            contract_ids = await self._get_contract_ids()
+            if not contract_ids:
                 msg = "No active contracts found"
                 raise EauIDFError(msg)
-            contract_id = contracts[0]
+            contract_id = contract_ids[0]
 
-        details = await self.get_contract_details(contract_id)
+        details = await self._get_contract_details(contract_id)
         compte_info = details.get("compteInfo", [])
         if not compte_info:
             msg = "No meter information found for contract"
@@ -471,9 +495,7 @@ class EauIDFClient:
         )
 
         data = result.get("data", {})
-        records = [
-            ConsumptionRecord.from_api(raw) for raw in data.get("CONSOMMATION", [])
-        ]
+        records = [_record_from_api(raw) for raw in data.get("CONSOMMATION", [])]
 
         return ConsumptionData(
             records=records,
