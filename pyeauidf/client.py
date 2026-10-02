@@ -92,6 +92,16 @@ class ConsumptionData:
         return sum(self.daily_cost(r) for r in self.records)
 
 
+@dataclass(frozen=True)
+class Contract:
+    """An active contract of the account."""
+
+    contract_id: str
+    """Opaque identifier used by the API; it can change over time."""
+    number: str
+    """Contract number shown to the customer; stable, use it as identifier."""
+
+
 class EauIDFError(Exception):
     """Base exception for pyeauidf errors."""
 
@@ -423,6 +433,15 @@ class EauIDFClient:
             params={"contratId": contract_id},
         )
         return result
+
+    async def get_active_contracts(self) -> list[Contract]:
+        """Get the active contracts with their contract number."""
+        contracts = []
+        for contract_id in await self.get_contracts():
+            details = await self.get_contract_details(contract_id)
+            number = details.get("contrat", {}).get("Name", contract_id)
+            contracts.append(Contract(contract_id=contract_id, number=str(number)))
+        return contracts
 
     async def get_daily_consumption(
         self,

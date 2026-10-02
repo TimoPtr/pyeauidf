@@ -14,6 +14,7 @@ from pyeauidf.client import (
     AuthenticationError,
     ConsumptionData,
     ConsumptionRecord,
+    Contract,
     EauIDFClient,
     EauIDFError,
 )
@@ -412,6 +413,46 @@ _GET_DATA_RESPONSE = {
         },
     ],
 }
+
+
+def _contract_details_response(details: dict[str, object]) -> dict[str, object]:
+    return {
+        "actions": [
+            {"state": "SUCCESS", "returnValue": {"returnValue": details}},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_active_contracts_returns_contract_numbers() -> None:
+    async with EauIDFClient("user", "pass") as client:
+        client._authenticated = True
+        client._fwuid = "fw1"
+        with aioresponses() as m:
+            m.post(AURA_URL_RE, payload=_CONTRACTS_RESPONSE, status=200)
+            m.post(
+                AURA_URL_RE,
+                payload=_contract_details_response({"contrat": {"Name": 9235380}}),
+                status=200,
+            )
+
+            contracts = await client.get_active_contracts()
+
+    assert contracts == [Contract(contract_id="contract-1", number="9235380")]
+
+
+@pytest.mark.asyncio
+async def test_get_active_contracts_falls_back_to_contract_id() -> None:
+    async with EauIDFClient("user", "pass") as client:
+        client._authenticated = True
+        client._fwuid = "fw1"
+        with aioresponses() as m:
+            m.post(AURA_URL_RE, payload=_CONTRACTS_RESPONSE, status=200)
+            m.post(AURA_URL_RE, payload=_CONTRACT_DETAILS_RESPONSE, status=200)
+
+            contracts = await client.get_active_contracts()
+
+    assert contracts == [Contract(contract_id="contract-1", number="contract-1")]
 
 
 @pytest.mark.asyncio

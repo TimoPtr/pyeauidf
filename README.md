@@ -55,6 +55,10 @@ async def main():
     async with EauIDFClient("email@example.com", "password") as client:
         await client.login()
 
+        # Active contracts; the number is stable, the API id can change
+        for contract in await client.get_active_contracts():
+            print(contract.number)
+
         # Daily consumption (last 90 days by default)
         result = await client.get_daily_consumption()
         for r in result.records:
@@ -96,6 +100,13 @@ Each `ConsumptionRecord` contains:
 | `consumption_liters` | `float` | Water consumed (liters) |
 | `meter_reading` | `float` | Cumulative meter reading (m³) |
 | `is_estimated` | `bool` | Whether the value is estimated |
+
+`get_active_contracts()` returns a list of `Contract`:
+
+| Field | Type | Description |
+|---|---|---|
+| `contract_id` | `str` | Opaque API identifier, can change over time |
+| `number` | `str` | Contract number shown to the customer, stable |
 
 ## How it works
 
