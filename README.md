@@ -77,6 +77,10 @@ async def main():
             end_date=date(2026, 3, 1),
         )
 
+        # A specific contract (the first active one is used by default)
+        contracts = await client.get_active_contracts()
+        result = await client.get_daily_consumption(contract=contracts[0])
+
 
 asyncio.run(main())
 ```

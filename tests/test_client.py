@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Timothy (TimoPtr)
 import re
 from datetime import UTC, date, datetime
+from unittest.mock import patch
 
 import aiohttp
 import pytest
@@ -17,12 +18,13 @@ from pyeauidf.client import (
     Contract,
     EauIDFClient,
     EauIDFError,
+    _record_from_api,
 )
 
 AURA_URL_RE = re.compile(r"^https://connexion\.leaudiledefrance\.fr/s/sfsites/aura\b")
 
 # ---------------------------------------------------------------------------
-# ConsumptionRecord.from_api
+# _record_from_api
 # ---------------------------------------------------------------------------
 
 
@@ -33,7 +35,7 @@ def test_from_api_parses_fields() -> None:
         "VALEUR_INDEX": "1234.567",
         "FLAG_ESTIMATION": "false",
     }
-    record = ConsumptionRecord.from_api(raw)
+    record = _record_from_api(raw)
     assert record.date == datetime(2024, 3, 15, tzinfo=UTC)
     assert record.consumption_liters == pytest.approx(123.0)
     assert record.meter_reading == pytest.approx(1234.567)
@@ -48,7 +50,7 @@ def test_from_api_estimated_truthy(flag: str) -> None:
         "VALEUR_INDEX": "0",
         "FLAG_ESTIMATION": flag,
     }
-    assert ConsumptionRecord.from_api(raw).is_estimated is True
+    assert _record_from_api(raw).is_estimated is True
 
 
 @pytest.mark.parametrize("flag", ["false", "0", "no", "", None])
@@ -60,7 +62,7 @@ def test_from_api_estimated_falsy(flag: str | None) -> None:
     }
     if flag is not None:
         raw["FLAG_ESTIMATION"] = flag
-    assert ConsumptionRecord.from_api(raw).is_estimated is False
+    assert _record_from_api(raw).is_estimated is False
 
 
 def test_from_api_consumption_converts_m3_to_liters() -> None:
@@ -69,7 +71,7 @@ def test_from_api_consumption_converts_m3_to_liters() -> None:
         "CONSOMMATION": "1.5",
         "VALEUR_INDEX": "0",
     }
-    assert ConsumptionRecord.from_api(raw).consumption_liters == pytest.approx(
+    assert _record_from_api(raw).consumption_liters == pytest.approx(
         1500.0,
     )
 
@@ -475,6 +477,34 @@ async def test_get_daily_consumption_returns_consumption_data() -> None:
             assert result.records[0].consumption_liters == pytest.approx(150.0)
             assert result.records[1].is_estimated is True
             assert result.price_per_m3 == pytest.approx(4.2345)
+
+
+@pytest.mark.asyncio
+async def test_get_daily_consumption_for_given_contract() -> None:
+    """A given contract is used directly, without listing the account's contracts."""
+    contract = Contract(contract_id="contract-9", number="9235380")
+    async with EauIDFClient("user", "pass") as client:
+        client._authenticated = True
+        client._fwuid = "fw1"
+        with (
+            aioresponses() as m,
+            patch.object(
+                client,
+                "_get_contract_details",
+                wraps=client._get_contract_details,
+            ) as details,
+        ):
+            m.post(AURA_URL_RE, payload=_CONTRACT_DETAILS_RESPONSE, status=200)
+            m.post(AURA_URL_RE, payload=_GET_DATA_RESPONSE, status=200)
+
+            result = await client.get_daily_consumption(
+                contract=contract,
+                start_date=date(2024, 3, 15),
+                end_date=date(2024, 3, 17),
+            )
+
+    details.assert_awaited_once_with("contract-9")
+    assert len(result.records) == 2
 
 
 @pytest.mark.asyncio
