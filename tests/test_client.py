@@ -1,5 +1,7 @@
 # Copyright (c) 2026 Timothy (TimoPtr)
+import hashlib
 import re
+import ssl
 from datetime import UTC, date, datetime
 from unittest.mock import patch
 
@@ -18,10 +20,23 @@ from pyeauidf.client import (
     Contract,
     EauIDFClient,
     EauIDFError,
+    _build_ssl_context,
     _record_from_api,
 )
 
 AURA_URL_RE = re.compile(r"^https://connexion\.leaudiledefrance\.fr/s/sfsites/aura\b")
+
+
+def test_ssl_context_loads_gandicert() -> None:
+    expected = "3337d4e4b4ef6a94f04915d2e86b1f8f47a3c83667da2519d9b95ae7270affe1"
+    ctx = _build_ssl_context()
+    fingerprints = {
+        hashlib.sha256(cert).hexdigest() for cert in ctx.get_ca_certs(binary_form=True)
+    }
+    assert expected in fingerprints
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
+
 
 # ---------------------------------------------------------------------------
 # _record_from_api
