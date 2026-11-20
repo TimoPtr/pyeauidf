@@ -110,7 +110,7 @@ class AuthenticationError(EauIDFError):
 
 
 def _build_ssl_context() -> ssl.SSLContext:
-    """Create an SSL context with the Gandi intermediates omitted by the portal."""
+    """Create an SSL context with the Gandi intermediate omitted by the portal."""
     ctx = ssl.create_default_context(cafile=certifi.where())
     ctx.load_verify_locations(cafile=str(_INTERMEDIATE_CERT))
     return ctx
